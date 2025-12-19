@@ -304,6 +304,11 @@ _MULTIMODAL_MODELS = {
         "granite_speech",
         "GraniteSpeechForConditionalGeneration",
     ),
+    # NVIDIA Canary-Qwen speech recognition model (SALM architecture)
+    "CanaryQwenForConditionalGeneration": (
+        "canary_qwen",
+        "CanaryQwenForConditionalGeneration",
+    ),
     "H2OVLChatModel": ("h2ovl", "H2OVLChatModel"),
     "HunYuanVLForConditionalGeneration": (
         "hunyuan_vision",

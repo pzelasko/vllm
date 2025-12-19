@@ -623,6 +623,20 @@ _MULTIMODAL_EXAMPLE_MODELS = {
     "GraniteSpeechForConditionalGeneration": _HfExamplesInfo(
         "ibm-granite/granite-speech-3.3-2b"
     ),
+    # NVIDIA Canary-Qwen speech recognition model (SALM architecture)
+    # Requires NeMo toolkit: pip install nemo_toolkit[asr]
+    "CanaryQwenForConditionalGeneration": _HfExamplesInfo(
+        "nvidia/canary-qwen-2.5b",
+        trust_remote_code=True,
+        # Model uses NeMo config format, need to specify architecture and model_type
+        hf_overrides={
+            "architectures": ["CanaryQwenForConditionalGeneration"],
+            "model_type": "canary_qwen",
+        },
+        # Model on HF has incorrect tokenizer, use LLM tokenizer.
+        # The model automatically adds <|audioplaceholder|> during init.
+        tokenizer="Qwen/Qwen3-1.7B",
+    ),
     "GLM4VForCausalLM": _HfExamplesInfo(
         "zai-org/glm-4v-9b",
         trust_remote_code=True,

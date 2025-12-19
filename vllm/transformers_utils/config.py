@@ -67,6 +67,7 @@ class LazyConfigDict(dict):
 _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = LazyConfigDict(
     afmoe="AfmoeConfig",
     bagel="BagelConfig",
+    canary_qwen="CanaryQwenConfig",  # NVIDIA Canary-Qwen speech recognition
     chatglm="ChatGLMConfig",
     deepseek_vl_v2="DeepseekVLV2Config",
     deepseek_v32="DeepseekV3Config",
@@ -91,6 +92,7 @@ _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = LazyConfigDict(
     qwen3_next="Qwen3NextConfig",
     lfm2_moe="Lfm2MoeConfig",
     tarsier2="Tarsier2Config",
+    salm="CanaryQwenConfig",  # Alias for canary_qwen
 )
 
 _CONFIG_ATTRS_MAPPING: dict[str, str] = {
