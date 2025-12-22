@@ -110,12 +110,7 @@ class CanaryQwenProcessingInfo(BaseProcessingInfo):
 
     def get_max_audio_tokens(self) -> int:
         """Get maximum number of audio tokens based on max audio duration."""
-        # This is an estimate based on typical FastConformer output
-        # FastConformer has ~4x subsampling, and modality adapter may add more
-        # For 40s audio at 16kHz: 640000 samples -> ~160000 frames after mel
-        # After encoder subsampling (~4x): ~40000 -> after adapter: ~10000
-        # Conservative estimate for profiling
-        return 10000
+        return CanaryQwenMultiModalProcessor._estimate_audio_tokens(self.get_max_audio_len())
 
     def get_max_audio_len(self) -> int:
         """Get maximum audio length in samples."""
@@ -206,8 +201,10 @@ class CanaryQwenMultiModalProcessor(
             audios = mm_items.get_items("audio", AudioProcessorItems)
             audio = audios.get(item_idx)
             audio_length = audio.shape[-1]
+            # print(f"[_get_prompt_updates.get_replacement()] {audio_length=}")
             # Estimate number of audio tokens based on audio length
             num_audio_tokens = self._estimate_audio_tokens(audio_length)
+            # print(f"[_get_prompt_updates.get_replacement()] {num_audio_tokens=}")
             # Return token ID sequence
             return [audio_token_id] * num_audio_tokens
 
@@ -220,7 +217,8 @@ class CanaryQwenMultiModalProcessor(
             )
         ]
 
-    def _estimate_audio_tokens(self, audio_length_samples: int) -> int:
+    @staticmethod
+    def _estimate_audio_tokens(audio_length_samples: int) -> int:
         """Estimate the number of audio tokens for a given audio length.
 
         This matches NeMo's AudioPerceptionModule token calculation.
@@ -274,6 +272,8 @@ class CanaryQwenMultiModalProcessor(
         mm_data = dict(mm_data)
         audios = mm_data.pop("audios", [])
 
+        # print(f"[_call_hf_processor()] {prompt=}")
+
         # Tokenize the prompt
         prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
 
@@ -308,6 +308,7 @@ class CanaryQwenMultiModalProcessor(
             result["audio_signal_length"] = torch.tensor(audio_lengths)
             result["audio_embed_sizes"] = torch.tensor(audio_embed_sizes)
 
+        # print(f"[_call_hf_processor()] {result=}")
         return result
 
 
@@ -335,7 +336,7 @@ class CanaryQwenDummyInputsBuilder(
 
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         num_audios = mm_counts.get("audio", 0)
-        return _AUDIO_PLACEHOLDER_TOKEN * num_audios
+        return "Transcribe the following: " + _AUDIO_PLACEHOLDER_TOKEN * num_audios
 
 
 def _load_nemo_perception_module(
@@ -353,7 +354,7 @@ def _load_nemo_perception_module(
     except ImportError as e:
         raise ImportError(
             "NeMo is required for Canary-Qwen model. "
-            "Install it with: pip install nemo_toolkit[asr]"
+            "Install it with: pip install nemo_toolkit[asr,tts]"
         ) from e
 
     perception_config = DictConfig(config)
@@ -594,6 +595,8 @@ class CanaryQwenForConditionalGeneration(
             actual_len = min(size, audio_embed_lens[i].item())
             result.append(audio_embeds[i, :actual_len])
 
+        # print(f"[_process_audio_input()] {len(result)=} {result[0].shape=}")
+
         return tuple(result)
 
     def get_language_model(self) -> nn.Module:
@@ -611,6 +614,65 @@ class CanaryQwenForConditionalGeneration(
         audio_features = self._process_audio_input(audio_input)
         return audio_features
 
+    def embed_input_ids(
+        self,
+        input_ids: torch.Tensor,
+        multimodal_embeddings: MultiModalEmbeddings | None = None,
+        *,
+        is_multimodal: torch.Tensor | None = None,
+        handle_oov_mm_token: bool = False,
+    ) -> torch.Tensor:
+        """
+        Apply token embeddings to `input_ids`.
+
+        If `multimodal_embeddings` is passed, scatter them into
+        `input_ids` according to the mask `is_multimodal`.
+
+        In case the multi-modal token IDs exceed the vocabulary size of
+        the language model, you can set `handle_oov_mm_token=False`
+        to avoid calling the language model's `embed_input_ids` method
+        on those tokens. Note however that doing so increases memory usage
+        as an additional buffer is needed to hold the input embeddings.
+        """
+        from .utils import _merge_multimodal_embeddings
+
+        # print(f"[embed_input_ids()] {input_ids=}")
+        # print(f"[embed_input_ids()] {input_ids.shape=}")
+        # print(f"[embed_input_ids()] {is_multimodal.nonzero(as_tuple=False)=}")
+        # if is_multimodal is not None:
+        #     print(f"[embed_input_ids()] {is_multimodal=}")
+        #     print(f"[embed_input_ids()] {is_multimodal.shape=}")
+        # if multimodal_embeddings is not None:
+        #     if isinstance(multimodal_embeddings, torch.Tensor):
+        #         print(f"[embed_input_ids()] {multimodal_embeddings.shape=}")
+        #     else:
+        #         print(f"[embed_input_ids()] {len(multimodal_embeddings)=}")
+        #         if len(multimodal_embeddings) > 0:
+        #             print(f"[embed_input_ids()] {multimodal_embeddings[0].shape=}")
+
+        inputs_embeds = self._embed_text_input_ids(
+            input_ids,
+            self.get_language_model().embed_input_ids,
+            is_multimodal=is_multimodal,
+            handle_oov_mm_token=handle_oov_mm_token,
+        )
+
+        # print(f"[embed_input_ids()] {inputs_embeds.shape=}")
+
+        if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
+            return inputs_embeds
+
+        ans = _merge_multimodal_embeddings(
+            inputs_embeds=inputs_embeds,
+            multimodal_embeddings=multimodal_embeddings,
+            is_multimodal=is_multimodal,
+        )
+
+        # print(f"[embed_input_ids()] {ans.shape=} {ans=}")
+
+        return ans
+
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -619,6 +681,17 @@ class CanaryQwenForConditionalGeneration(
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
+        # print(f"[forward()] {input_ids=}")
+
+        # if input_ids is not None:
+        #     print(f"[forward()] {input_ids.shape=}")
+        # if positions is not None:
+        #     print(f"[forward()] {positions.shape=}")
+        # if intermediate_tensors is not None:
+        #     print(f"[forward()] {intermediate_tensors.shape=}")
+        # if inputs_embeds is not None:
+        #     print(f"[forward()] {inputs_embeds.shape=}")
+
         if intermediate_tensors is not None:
             inputs_embeds = None
 
